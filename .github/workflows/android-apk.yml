@@ -7,7 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Depoyu indir
         uses: actions/checkout@v4
@@ -17,11 +16,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-     - name: Android SDK kur
-       
-uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools platforms;android-35 build-tools;35.0.0
+
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v3
+
       - name: Gradle kur
         uses: gradle/actions/setup-gradle@v4
 
@@ -31,6 +29,7 @@ uses: android-actions/setup-android@v3
           unzip -o YB_Aurora_Android_Uygulama_Kaynak.zip -d /tmp/aurora
 
       - name: APK derle
+        shell: bash
         run: |
           PROJECT="$(find /tmp/aurora -name settings.gradle.kts -printf '%h\n' | head -1)"
           if [ -z "$PROJECT" ]; then
