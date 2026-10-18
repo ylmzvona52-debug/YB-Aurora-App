@@ -1,0 +1,46 @@
+
+name: YB Aurora APK Derle
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Java kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v3
+
+      - name: Gradle kur
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Kaynak ZIP dosyasini ac
+        run: |
+          mkdir -p /tmp/aurora
+          unzip -o YB_Aurora_Android_Uygulama_Kaynak.zip -d /tmp/aurora
+
+      - name: APK derle
+        run: |
+          PROJECT="$(find /tmp/aurora -name settings.gradle.kts -printf '%h\n' | head -1)"
+          if [ -z "$PROJECT" ]; then
+            echo "Proje dosyasi bulunamadi"
+            exit 1
+          fi
+          cd "$PROJECT"
+          gradle --no-daemon assembleDebug
+
+      - name: APK dosyasini yayinla
+        uses: actions/upload-artifact@v4
+        with:
+          name: YB-Aurora-debug-APK
+          path: /tmp/aurora/**/app/build/outputs/apk/debug/*.apk
