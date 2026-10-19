@@ -35,10 +35,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP="YB_Aurora_Android_Uygulama_Kaynak.zip"
+          ZIP="YB_Aurora_Android_Uygulama_Kaynak_DUZELTILMIS.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "::error::Kaynak ZIP dosyasi bulunamadi."
+            echo "::error::Kaynak ZIP dosyasi bulunamadi: $ZIP"
+            echo "Depo ana dizinindeki ZIP dosyalar:"
+            find . -maxdepth 2 -type f -iname "*.zip" -print
             exit 1
           fi
 
@@ -55,64 +57,61 @@ jobs:
           import re
 
           root = Path("/tmp/aurora")
-          changed = 0
-
           files = list(root.rglob("build.gradle"))
           files += list(root.rglob("build.gradle.kts"))
+
+          changed = 0
 
           for path in files:
               text = path.read_text(encoding="utf-8")
               original = text
               is_kts = path.name.endswith(".kts")
 
-              # Eski Java hedeflerini 17 yap.
               text = text.replace(
                   "JavaVersion.VERSION_1_8",
                   "JavaVersion.VERSION_17"
               )
 
-              # Java hedefleri sayi veya metin olarak yazilmissa duzelt.
               text = re.sub(
                   r'(?m)^(\s*sourceCompatibility\s*=\s*)["\']?1\.8["\']?',
                   r'\1JavaVersion.VERSION_17',
                   text
               )
+
               text = re.sub(
                   r'(?m)^(\s*targetCompatibility\s*=\s*)["\']?1\.8["\']?',
                   r'\1JavaVersion.VERSION_17',
                   text
               )
 
-              # Groovy DSL icin Java hedeflerini duzelt.
               if not is_kts:
                   text = re.sub(
                       r'(?m)^(\s*sourceCompatibility\s+)["\']?1\.8["\']?',
                       r'\1JavaVersion.VERSION_17',
                       text
                   )
+
                   text = re.sub(
                       r'(?m)^(\s*targetCompatibility\s+)["\']?1\.8["\']?',
                       r'\1JavaVersion.VERSION_17',
                       text
                   )
 
-              # Kotlin hedefini 17 yap.
               text = re.sub(
                   r'jvmTarget\s*=\s*["\'](?:1\.8|8|17)["\']',
                   'jvmTarget = "17"',
                   text
               )
 
-              # Yalnizca Android modullerinde eksik ayarlari ekle.
               if re.search(r'\bandroid\s*\{', text):
-                  java_block = (
+                  java_block_kts = (
                       '    compileOptions {\n'
                       '        sourceCompatibility = JavaVersion.VERSION_17\n'
                       '        targetCompatibility = JavaVersion.VERSION_17\n'
                       '    }\n'
                   )
 
-                  groovy_java_block = (
+                  java_block_groovy = (
                       '    compileOptions {\n'
                       '        sourceCompatibility JavaVersion.VERSION_17\n'
                       '        targetCompatibility JavaVersion.VERSION_17\n'
@@ -126,10 +125,14 @@ jobs:
                   )
 
                   if not re.search(r'\bcompileOptions\s*\{', text):
-                      block = java_block if is_kts else groovy_java_block
+                      block = (
+                          java_block_kts
+                          if is_kts
+                          else java_block_groovy
+                      )
                       text = re.sub(
                           r'\bandroid\s*\{',
-                          lambda m: m.group(0) + '\n' + block,
+                          lambda match: match.group(0) + '\n' + block,
                           text,
                           count=1
                       )
@@ -137,7 +140,7 @@ jobs:
                   if not re.search(r'\bkotlinOptions\s*\{', text):
                       text = re.sub(
                           r'\bandroid\s*\{',
-                          lambda m: m.group(0) + '\n' + kotlin_block,
+                          lambda match: match.group(0) + '\n' + kotlin_block,
                           text,
                           count=1
                       )
@@ -147,7 +150,7 @@ jobs:
                   changed += 1
                   print(f"Guncellendi: {path}")
 
-          print(f"Degistirilen dosya sayisi: {changed}")
+          print(f"Degistirilen Gradle dosyasi: {changed}")
           PY
 
       - name: Android projesini bul
@@ -163,12 +166,13 @@ jobs:
 
           if [ -z "$SETTINGS" ]; then
             echo "::error::settings.gradle dosyasi bulunamadi."
+            find /tmp/aurora -maxdepth 4 -type f -print
             exit 1
           fi
 
           PROJECT="$(dirname "$SETTINGS")"
           echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje: $PROJECT"
+          echo "Android proje dizini: $PROJECT"
 
       - name: Gerekli Android SDK paketlerini kur
         shell: bash
@@ -222,7 +226,7 @@ jobs:
               encoding="utf-8"
           )
 
-          print("Kurulacak SDK paketleri:")
+          print("Kurulacak Android SDK paketleri:")
           print("\n".join(packages))
           PY
 
@@ -257,12 +261,14 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "::error::APK dosyasi bulunamadi."
+            echo "Olusturulan APK dosyalari:"
+            find /tmp/aurora -type f -name "*.apk" -print
             exit 1
           fi
 
           mkdir -p apk-output
           cp "$APK" apk-output/YB-Aurora-debug.apk
-          echo "APK hazir."
+          echo "APK hazir: apk-output/YB-Aurora-debug.apk"
 
       - name: APK dosyasini yayinla
         uses: actions/upload-artifact@v4
