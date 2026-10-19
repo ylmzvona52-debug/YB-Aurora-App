@@ -23,9 +23,10 @@ jobs:
           java-version: "17"
 
       - name: Android SDK kur
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
-          accept-android-sdk-licenses: true
+          packages: "platform-tools"
+          log-accepted-android-sdk-licenses: "false"
 
       - name: Gradle kur
         uses: gradle/actions/setup-gradle@v4
@@ -45,7 +46,7 @@ jobs:
           mkdir -p /tmp/aurora
           unzip -o "$ZIP" -d /tmp/aurora
 
-      - name: Java ve Kotlin hedeflerini duzelt
+      - name: Java hedeflerini duzelt
         shell: bash
         run: |
           set -euo pipefail
@@ -58,54 +59,34 @@ jobs:
           root = Path("/tmp/aurora")
           files = list(root.rglob("build.gradle.kts"))
           files += list(root.rglob("build.gradle"))
-
-          android_files = []
+          count = 0
 
           for path in files:
               text = path.read_text(encoding="utf-8")
-              if re.search(r'\bandroid\s*\{', text):
-                  android_files.append(path)
 
-          if not android_files:
-              print("Android modulunun Gradle dosyasi bulunamadi.")
-              sys.exit(1)
+              if not re.search(r'\bandroid\s*\{', text):
+                  continue
 
-          changed = 0
-
-          for path in android_files:
-              text = path.read_text(encoding="utf-8")
               original = text
 
-              # Java 8 hedeflerini Java 17 yap.
               text = re.sub(
                   r'JavaVersion\.VERSION_1_8',
                   'JavaVersion.VERSION_17',
                   text
               )
 
-              # Kotlin jvmTarget hedefini 17 yap.
               text = re.sub(
-                  r"""(jvmTarget\s*=\s*)["'](?:1\.8|8)["']""",
+                  r'(?m)^(\s*jvmTarget\s*=\s*)["\'](?:1\.8|8)["\']',
                   r'\1"17"',
-                  text
-              )
-
-              # Eski Kotlin DSL hedef bildirimlerini de ele al.
-              text = re.sub(
-                  r'JvmTarget\.JVM_1_8\b',
-                  'JvmTarget.JVM_17',
                   text
               )
 
               if text != original:
                   path.write_text(text, encoding="utf-8")
-                  changed += 1
+                  count += 1
                   print(f"Guncellendi: {path}")
-              else:
-                  print(f"Degisiklik gerekmiyor: {path}")
 
-          print(f"Kontrol edilen Android dosyasi: {len(android_files)}")
-          print(f"Degistirilen dosya: {changed}")
+          print(f"Degistirilen modul dosyasi: {count}")
           PY
 
       - name: Android projesini bul
@@ -125,15 +106,73 @@ jobs:
           fi
 
           PROJECT="$(dirname "$SETTINGS")"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Proje: $PROJECT"
 
-          if [ ! -f "$PROJECT/build.gradle.kts" ] && \
-             [ ! -f "$PROJECT/build.gradle" ]; then
-            echo "::error::Ana Gradle dosyasi bulunamadi."
+      - name: Gerekli Android SDK paketlerini kur
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.dir }}"
+
+          SDKMANAGER="$(command -v sdkmanager)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager bulunamadi."
             exit 1
           fi
 
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje bulundu: $PROJECT"
+          echo "SDK Manager: $SDKMANAGER"
+
+          # Projenin Android API ve build-tools surumlerini bul.
+          python3 - "$PROJECT" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path(sys.argv[1])
+          texts = []
+
+          for name in ("build.gradle", "build.gradle.kts"):
+              for path in root.rglob(name):
+                  texts.append(path.read_text(encoding="utf-8"))
+
+          text = "\n".join(texts)
+
+          api = re.search(
+              r'\bcompileSdk(?:Version)?\s*(?:=\s*)?(\d+)',
+              text
+          )
+
+          build_tools = re.search(
+              r'buildToolsVersion\s*(?:=\s*)?["\']([^"\']+)',
+              text
+          )
+
+          api_version = api.group(1) if api else "35"
+
+          packages = [
+              "platform-tools",
+              f"platforms;android-{api_version}"
+          ]
+
+          if build_tools:
+              packages.append(f"build-tools;{build_tools.group(1)}")
+
+          Path("/tmp/android-packages.txt").write_text(
+              "\n".join(packages) + "\n",
+              encoding="utf-8"
+          )
+
+          print("Kurulacak SDK paketleri:")
+          print("\n".join(packages))
+          PY
+
+          while IFS= read -r package; do
+            [ -n "$package" ] || continue
+            sdkmanager --install "$package"
+          done < /tmp/android-packages.txt
 
       - name: APK derle
         shell: bash
@@ -166,7 +205,7 @@ jobs:
 
           mkdir -p apk-output
           cp "$APK" apk-output/YB-Aurora-debug.apk
-          echo "APK dosyasi hazir."
+          echo "APK hazir."
 
       - name: APK dosyasini yayinla
         uses: actions/upload-artifact@v4
