@@ -39,241 +39,69 @@ jobs:
 
           if [ ! -f "$ZIP" ]; then
             echo "::error::Kaynak ZIP dosyasi bulunamadi: $ZIP"
-            echo "Depo ana dizinindeki ZIP dosyalar:"
-            find . -maxdepth 2 -type f -iname "*.zip" -print
+            echo "Depodaki ZIP dosyalari:"
+            find . -maxdepth 3 -type f -iname "*.zip" -print
             exit 1
           fi
 
           mkdir -p /tmp/aurora
           unzip -o "$ZIP" -d /tmp/aurora
 
-      - name: Java ve Kotlin hedeflerini 17 yap
+          echo "Kaynak ZIP acildi."
+
+      - name: Gecersiz arama XML dosyasini kontrol et
         shell: bash
         run: |
           set -euo pipefail
 
           python3 <<'PY'
           from pathlib import Path
-          import re
-
-          root = Path("/tmp/aurora")
-          files = list(root.rglob("build.gradle"))
-          files += list(root.rglob("build.gradle.kts"))
-
-          changed = 0
-
-          for path in files:
-              text = path.read_text(encoding="utf-8")
-              original = text
-              is_kts = path.name.endswith(".kts")
-
-              text = text.replace(
-                  "JavaVersion.VERSION_1_8",
-                  "JavaVersion.VERSION_17"
-              )
-
-              text = re.sub(
-                  r'(?m)^(\s*sourceCompatibility\s*=\s*)["\']?1\.8["\']?',
-                  r'\1JavaVersion.VERSION_17',
-                  text
-              )
-
-              text = re.sub(
-                  r'(?m)^(\s*targetCompatibility\s*=\s*)["\']?1\.8["\']?',
-                  r'\1JavaVersion.VERSION_17',
-                  text
-              )
-
-              if not is_kts:
-                  text = re.sub(
-                      r'(?m)^(\s*sourceCompatibility\s+)["\']?1\.8["\']?',
-                      r'\1JavaVersion.VERSION_17',
-                      text
-                  )
-
-                  text = re.sub(
-                      r'(?m)^(\s*targetCompatibility\s+)["\']?1\.8["\']?',
-                      r'\1JavaVersion.VERSION_17',
-                      text
-                  )
-
-              text = re.sub(
-                  r'jvmTarget\s*=\s*["\'](?:1\.8|8|17)["\']',
-                  'jvmTarget = "17"',
-                  text
-              )
-
-              if re.search(r'\bandroid\s*\{', text):
-                  java_block_kts = (
-                      '    compileOptions {\n'
-                      '        sourceCompatibility = JavaVersion.VERSION_17\n'
-                      '        targetCompatibility = JavaVersion.VERSION_17\n'
-                      '    }\n'
-                  )
-
-                  java_block_groovy = (
-                      '    compileOptions {\n'
-                      '        sourceCompatibility JavaVersion.VERSION_17\n'
-                      '        targetCompatibility JavaVersion.VERSION_17\n'
-                      '    }\n'
-                  )
-
-                  kotlin_block = (
-                      '    kotlinOptions {\n'
-                      '        jvmTarget = "17"\n'
-                      '    }\n'
-                  )
-
-                  if not re.search(r'\bcompileOptions\s*\{', text):
-                      block = (
-                          java_block_kts
-                          if is_kts
-                          else java_block_groovy
-                      )
-                      text = re.sub(
-                          r'\bandroid\s*\{',
-                          lambda match: match.group(0) + '\n' + block,
-                          text,
-                          count=1
-                      )
-
-                  if not re.search(r'\bkotlinOptions\s*\{', text):
-                      text = re.sub(
-                          r'\bandroid\s*\{',
-                          lambda match: match.group(0) + '\n' + kotlin_block,
-                          text,
-                          count=1
-                      )
-
-              if text != original:
-                  path.write_text(text, encoding="utf-8")
-                  changed += 1
-                  print(f"Guncellendi: {path}")
-
-          print(f"Degistirilen Gradle dosyasi: {changed}")
-          PY
-
-      - name: Android projesini bul
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SETTINGS="$(find /tmp/aurora -type f \( \
-            -name settings.gradle.kts -o \
-            -name settings.gradle \
-          \) -print -quit)"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::settings.gradle dosyasi bulunamadi."
-            find /tmp/aurora -maxdepth 4 -type f -print
-            exit 1
-          fi
-
-          PROJECT="$(dirname "$SETTINGS")"
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Android proje dizini: $PROJECT"
-
-      - name: Gerekli Android SDK paketlerini kur
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT="${{ steps.project.outputs.dir }}"
-          SDKMANAGER="$(command -v sdkmanager)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager bulunamadi."
-            exit 1
-          fi
-
-          python3 - "$PROJECT" <<'PY'
-          from pathlib import Path
-          import re
           import sys
 
-          root = Path(sys.argv[1])
-          texts = []
+          root = Path("/tmp/aurora")
 
-          for name in ("build.gradle", "build.gradle.kts"):
-              for path in root.rglob(name):
-                  texts.append(path.read_text(encoding="utf-8"))
-
-          text = "\n".join(texts)
-
-          api = re.search(
-              r'\bcompileSdk(?:Version)?\s*(?:=\s*)?(\d+)',
-              text
+          xml_files = list(
+              root.rglob("app/src/main/res/xml/in_call_service.xml")
           )
 
-          build_tools = re.search(
-              r'buildToolsVersion\s*(?:=\s*)?["\']([^"\']+)',
-              text
+          if not xml_files:
+              print("in_call_service.xml bulunamadi; bu adim atlandi.")
+              sys.exit(0)
+
+          manifests = list(
+              root.rglob("app/src/main/AndroidManifest.xml")
           )
 
-          api_version = api.group(1) if api else "35"
+          for xml in xml_files:
+              referenced = False
 
-          packages = [
-              "platform-tools",
-              f"platforms;android-{api_version}"
-          ]
+              for manifest in manifests:
+                  content = manifest.read_text(
+                      encoding="utf-8"
+                  )
 
-          if build_tools:
-              packages.append(f"build-tools;{build_tools.group(1)}")
+                  if "in_call_service" in content:
+                      referenced = True
+                      print(
+                          "Manifest dosyasinda arama hizmeti "
+                          f"referansi bulundu: {manifest}"
+                      )
 
-          Path("/tmp/android-packages.txt").write_text(
-              "\n".join(packages) + "\n",
-              encoding="utf-8"
-          )
+              if referenced:
+                  print(
+                      "HATA: XML dosyasi Manifest tarafindan "
+                      "referans ediliyor."
+                  )
+                  print(
+                      "Dosya otomatik silinmedi. "
+                      "Manifest ve XML birlikte duzeltilmeli."
+                  )
+                  sys.exit(1)
 
-          print("Kurulacak Android SDK paketleri:")
-          print("\n".join(packages))
+              print(f"Kullanilmayan XML dosyasi kaldiriliyor: {xml}")
+              xml.unlink()
+
+          print("XML kontrolu tamamlandi.")
           PY
 
-          while IFS= read -r package; do
-            [ -n "$package" ] || continue
-            sdkmanager --install "$package"
-          done < /tmp/android-packages.txt
-
-      - name: APK derle
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon assembleDebug
-          else
-            gradle --no-daemon assembleDebug
-          fi
-
-      - name: APK dosyasini bul
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find /tmp/aurora -type f \
-            -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "::error::APK dosyasi bulunamadi."
-            echo "Olusturulan APK dosyalari:"
-            find /tmp/aurora -type f -name "*.apk" -print
-            exit 1
-          fi
-
-          mkdir -p apk-output
-          cp "$APK" apk-output/YB-Aurora-debug.apk
-          echo "APK hazir: apk-output/YB-Aurora-debug.apk"
-
-      - name: APK dosyasini yayinla
-        uses: actions/upload-artifact@v4
-        with:
-          name: YB-Aurora-debug-APK
-          path: apk-output/YB-Aurora-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+      - name: Android
