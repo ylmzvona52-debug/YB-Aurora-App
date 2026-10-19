@@ -8,8 +8,12 @@ permissions:
 
 jobs:
   build:
-    name: Android APK Uygulamasi
+    name: Android APK Derle
     runs-on: ubuntu-24.04
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Depoyu indir
@@ -21,39 +25,107 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK kur
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "platform-tools"
-          log-accepted-android-sdk-licenses: true
+      - name: Android SDK aracini bul
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Gradle 8.9 kur
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+          if [ ! -d "$ANDROID_HOME" ]; then
+            echo "::error::Android SDK bulunamadi."
+            exit 1
+          fi
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -print -quit)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager bulunamadi."
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "Android SDK bulundu."
 
       - name: Android SDK lisanslarini kabul et
         shell: bash
         run: |
           set -euo pipefail
-          set +e
-          yes | sdkmanager --licenses
-          SDK_STATUS=${PIPESTATUS[1]}
-          set -e
-          if [ "$SDK_STATUS" -ne 0 ]; then
-            echo "::error::Android SDK lisanslari kabul edilemedi."
-            exit "$SDK_STATUS"
-          fi
+          set +o pipefail
 
-      - name: Gerekli Android SDK paketlerini kur
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses
+
+          set -o pipefail
+          echo "SDK lisans adimi tamamlandi."
+
+      - name: Android SDK paketlerini kur
         shell: bash
         run: |
           set -euo pipefail
 
-          sdkmanager --install \
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
+
+      - name: Gradle 8.9 kur
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd /tmp
+
+          curl -fL \
+            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
+            -o gradle.zip
+
+          unzip -q gradle.zip
+
+          echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
+
+      - name: Android kaynak ZIP dosyasini bul
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP=""
+
+          for FILE in ./*.zip; do
+            [ -f "$FILE" ] || continue
+
+            if unzip -Z1 "$FILE" 2>/dev/null |
+              grep -Eq '(^|/)settings\.gradle(\.kts)?$'; then
+              ZIP="$FILE"
+              break
+            fi
+          done
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::Android proje dosyalarini iceren ZIP bulunamadi."
+            echo "Depodaki ZIP dosyalari:"
+            find . -maxdepth 3 -type f -iname "*.zip" -print
+            exit 1
+          fi
+
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Kaynak ZIP bulundu: $ZIP"
+
+      - name: Kaynak ZIP dosyasini ac
+        shell: bash
+        env:
+          SOURCE_ZIP: ${{ steps.source.outputs.zip }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/aurora
+
+          unzip -o "$SOURCE_ZIP" -d /tmp/aurora
+
+          echo "Kaynak dosyalari acildi."
 
       - name: Android projesini bul
         id: project
@@ -61,21 +133,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          SETTINGS="$(find . -type f \
+          SETTINGS="$(find /tmp/aurora -type f \
             \( -name settings.gradle.kts \
             -o -name settings.gradle \) \
-            -not -path '*/.gradle/*' \
             -print -quit)"
 
           if [ -z "$SETTINGS" ]; then
-            echo "::error::Android proje ayarlari bulunamadi."
-            find . -maxdepth 5 -type f -print
+            echo "::error::settings.gradle dosyasi bulunamadi."
             exit 1
           fi
 
           PROJECT="$(dirname "$SETTINGS")"
+
           echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje dizini: $PROJECT"
+          echo "Android projesi: $PROJECT"
 
       - name: Android proje dosyalarini kontrol et
         shell: bash
@@ -86,18 +157,18 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          test -f settings.gradle.kts \
-            || test -f settings.gradle
+          if [ ! -f app/build.gradle.kts ] &&
+             [ ! -f app/build.gradle ]; then
+            echo "::error::app Gradle dosyasi bulunamadi."
+            exit 1
+          fi
 
-          test -f build.gradle.kts \
-            || test -f build.gradle
+          if [ ! -f app/src/main/AndroidManifest.xml ]; then
+            echo "::error::AndroidManifest.xml bulunamadi."
+            exit 1
+          fi
 
-          test -f app/build.gradle.kts \
-            || test -f app/build.gradle
-
-          test -f app/src/main/AndroidManifest.xml
-
-          echo "Gerekli proje dosyalari bulundu."
+          echo "Android proje dosyalari kontrol edildi."
 
       - name: APK derle
         shell: bash
@@ -118,20 +189,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find . -type f \
+          APK="$(find /tmp/aurora -type f \
             -path '*/build/outputs/apk/debug/*.apk' \
             -print -quit)"
 
           if [ -z "$APK" ]; then
-            echo "::error::Derleme sonrasi APK bulunamadi."
-            find . -type f -name "*.apk" -print
+            echo "::error::Derleme tamamlandi ancak APK bulunamadi."
+            find /tmp/aurora -type f -name "*.apk" -print
             exit 1
           fi
 
           mkdir -p apk-output
+
           cp "$APK" apk-output/YB-Aurora-debug.apk
 
-          echo "APK dosyasi hazir."
+          echo "Olusturulan APK:"
           ls -lh apk-output/YB-Aurora-debug.apk
 
       - name: APK dosyasini yayinla
