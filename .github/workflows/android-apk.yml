@@ -23,65 +23,29 @@ jobs:
 
       - name: Android SDK kur
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+          log-accepted-android-sdk-licenses: true
 
       - name: Gradle 8.9 kur
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Android SDK lisanslarini kabul et
         shell: bash
         run: |
           set -euo pipefail
-
-          cd /tmp
-          curl -fL \
-            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
-            -o gradle.zip
-
-          unzip -q gradle.zip
-          echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
-
-      - name: Kaynak ZIP dosyasini bul ve ac
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP="$(find . -maxdepth 4 -type f \
-            -iname '*Kaynak*.zip' -print -quit)"
-
-          if [ -z "$ZIP" ]; then
-            echo "::error::Kaynak ZIP dosyasi bulunamadi."
-            echo "Depodaki ZIP dosyalari:"
-            find . -type f -iname '*.zip' -print
-            exit 1
+          set +e
+          yes | sdkmanager --licenses
+          SDK_STATUS=${PIPESTATUS[1]}
+          set -e
+          if [ "$SDK_STATUS" -ne 0 ]; then
+            echo "::error::Android SDK lisanslari kabul edilemedi."
+            exit "$SDK_STATUS"
           fi
 
-          echo "Bulunan kaynak: $ZIP"
-
-          mkdir -p /tmp/aurora
-          unzip -o "$ZIP" -d /tmp/aurora
-
-          echo "Kaynak dosyalari acildi."
-
-      - name: Android projesini bul
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SETTINGS="$(find /tmp/aurora -type f \
-            \( -name settings.gradle.kts \
-            -o -name settings.gradle \) \
-            -print -quit)"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Android proje ayarlari bulunamadi."
-            find /tmp/aurora -maxdepth 5 -type f -print
-            exit 1
-          fi
-
-          PROJECT="$(dirname "$SETTINGS")"
-
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje dizini: $PROJECT"
-
-      - name: Android SDK paketlerini kur
+      - name: Gerekli Android SDK paketlerini kur
         shell: bash
         run: |
           set -euo pipefail
@@ -91,28 +55,49 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Gradle ve kaynaklari kontrol et
+      - name: Android projesini bul
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$(find . -type f \
+            \( -name settings.gradle.kts \
+            -o -name settings.gradle \) \
+            -not -path '*/.gradle/*' \
+            -print -quit)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::Android proje ayarlari bulunamadi."
+            find . -maxdepth 5 -type f -print
+            exit 1
+          fi
+
+          PROJECT="$(dirname "$SETTINGS")"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Proje dizini: $PROJECT"
+
+      - name: Android proje dosyalarini kontrol et
         shell: bash
         env:
           PROJECT_DIR: ${{ steps.project.outputs.dir }}
         run: |
           set -euo pipefail
 
-          echo "Gradle surumu:"
-          gradle --version
-
-          echo "Android proje dosyalari:"
           cd "$PROJECT_DIR"
 
           test -f settings.gradle.kts \
             || test -f settings.gradle
+
+          test -f build.gradle.kts \
+            || test -f build.gradle
 
           test -f app/build.gradle.kts \
             || test -f app/build.gradle
 
           test -f app/src/main/AndroidManifest.xml
 
-          echo "Temel proje dosyalari bulundu."
+          echo "Gerekli proje dosyalari bulundu."
 
       - name: APK derle
         shell: bash
@@ -128,29 +113,25 @@ jobs:
             --stacktrace \
             assembleDebug
 
-      - name: APK dosyasini bul
-        id: apk
+      - name: APK dosyasini bul ve hazirla
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find /tmp/aurora -type f \
+          APK="$(find . -type f \
             -path '*/build/outputs/apk/debug/*.apk' \
             -print -quit)"
 
           if [ -z "$APK" ]; then
-            echo "::error::Derleme tamamlandi ancak APK bulunamadi."
-            find /tmp/aurora -type f -name '*.apk' -print
+            echo "::error::Derleme sonrasi APK bulunamadi."
+            find . -type f -name "*.apk" -print
             exit 1
           fi
 
           mkdir -p apk-output
+          cp "$APK" apk-output/YB-Aurora-debug.apk
 
-          cp "$APK" \
-            apk-output/YB-Aurora-debug.apk
-
-          echo "APK hazirlandi."
-
+          echo "APK dosyasi hazir."
           ls -lh apk-output/YB-Aurora-debug.apk
 
       - name: APK dosyasini yayinla
