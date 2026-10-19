@@ -13,21 +13,6 @@ jobs:
 
     steps:
       - name: "Depoyu indir"
-name: "YB Aurora APK Derle"
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    name: "Android APK Uygulamasi"
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: "Depoyu indir"
         uses: actions/checkout@v4
 
       - name: "Java 17 kur"
@@ -59,7 +44,6 @@ jobs:
           set -euo pipefail
 
           mkdir -p /tmp/aurora
-
           ZIP=""
 
           for candidate in \
@@ -82,8 +66,6 @@ jobs:
           echo "Kullanilan kaynak: $ZIP"
           unzip -o "$ZIP" -d /tmp/aurora
 
-          echo "Kaynak dosyalari acildi."
-
       - name: "Android projesini bul"
         id: project
         shell: bash
@@ -92,8 +74,8 @@ jobs:
 
           SETTINGS="$(
             find /tmp/aurora -type f \
-              \( -name "settings.gradle.kts" \
-              -o -name "settings.gradle" \) \
+              -name "settings.gradle.kts" \
+              -o -name "settings.gradle" \
               -print -quit
           )"
 
@@ -119,7 +101,7 @@ jobs:
           echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
           echo "Proje dizini: $PROJECT"
 
-      - name: "Arama XML hatasini duzelt"
+      - name: "Hatali arama XML dosyasini duzelt"
         shell: bash
         run: |
           set -euo pipefail
@@ -129,19 +111,16 @@ jobs:
           import xml.etree.ElementTree as ET
 
           root = Path("/tmp/aurora")
-
-          manifests = list(
-              root.rglob("app/src/main/AndroidManifest.xml")
-          )
-
           android_ns = (
               "http://schemas.android.com/apk/res/android"
           )
 
-          ET.register_namespace("android", android_ns)
-
-          def android_attr(name):
+          def attr(name):
               return "{" + android_ns + "}" + name
+
+          manifests = list(
+              root.rglob("app/src/main/AndroidManifest.xml")
+          )
 
           for manifest in manifests:
               print(f"Manifest kontrol ediliyor: {manifest}")
@@ -150,140 +129,4 @@ jobs:
                   tree = ET.parse(manifest)
               except ET.ParseError as exc:
                   raise SystemExit(
-                      f"Manifest XML hatasi: {exc}"
-                  )
-
-              document = tree.getroot()
-              application = document.find("application")
-
-              if application is None:
-                  continue
-
-              removed = 0
-
-              for element in list(application):
-                  if element.tag != "service":
-                      continue
-
-                  service_name = element.get(
-                      android_attr("name"), ""
-                  )
-
-                  metadata_resources = [
-                      item.get(android_attr("resource"), "")
-                      for item in element.findall("meta-data")
-                  ]
-
-                  is_call_service = (
-                      "InCallService" in service_name
-                      or any(
-                          "in_call_service" in resource
-                          for resource in metadata_resources
-                      )
-                  )
-
-                  if is_call_service:
-                      print(
-                          "Gecici Manifest kopyasindan "
-                          "arama hizmeti kaldiriliyor: "
-                          + service_name
-                      )
-                      application.remove(element)
-                      removed += 1
-
-              if removed:
-                  tree.write(
-                      manifest,
-                      encoding="utf-8",
-                      xml_declaration=True
-                  )
-                  print(
-                      f"Kaldirilan arama hizmeti: {removed}"
-                  )
-              else:
-                  print(
-                      "Manifest icinde eslesen arama "
-                      "hizmeti bulunamadi."
-                  )
-
-          xml_files = list(
-              root.rglob(
-                  "app/src/main/res/xml/in_call_service.xml"
-              )
-          )
-
-          for xml in xml_files:
-              print(
-                  "Hatali XML dosyasi gecici kopyadan "
-                  f"kaldiriliyor: {xml}"
-              )
-              xml.unlink()
-
-          print("Arama XML kontrolu tamamlandi.")
-          PY
-
-      - name: "Gradle ve Android ayarlarini kontrol et"
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          echo "Java surumu:"
-          java -version
-
-          echo "Gradle surumu:"
-          gradle --version
-
-          echo "Android proje dizini:"
-          pwd
-
-      - name: "APK derle"
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          gradle --no-daemon assembleDebug
-
-      - name: "APK dosyasini bul ve kontrol et"
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(
-            find /tmp/aurora -type f \
-              -path "*/build/outputs/apk/debug/*.apk" \
-              -print -quit
-          )"
-
-          if [ -z "$APK" ]; then
-            echo "::error::APK dosyasi olusturulamadi."
-            find /tmp/aurora -type f -name "*.apk" -print
-            exit 1
-          fi
-
-          mkdir -p apk-output
-
-          cp "$APK" apk-output/YB-Aurora-debug.apk
-
-          if [ ! -s apk-output/YB-Aurora-debug.apk ]; then
-            echo "::error::APK dosyasi bos."
-            exit 1
-          fi
-
-          echo "APK dosyasi hazir:"
-          ls -lh apk-output/YB-Aurora-debug.apk
-
-      - name: "APK dosyasini yayinla"
-        uses: actions/upload-artifact@v4
-        with:
-          name: YB-Aurora-debug-APK
-          path: apk-output/YB-Aurora-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+                      f"Manifest
