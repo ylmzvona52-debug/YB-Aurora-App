@@ -1,51 +1,4 @@
 
-name: "YB Aurora APK Derle"
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    name: Android APK Uygulamasi
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Depoyu indir
-        uses: actions/checkout@v6
-
-      - name: Java 17 kur
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Android SDK kur
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: "true"
-          log-accepted-android-sdk-licenses: "false"
-
-      - name: Gradle kur
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Kaynak ZIP dosyasini kontrol et ve ac
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP="YB_Aurora_Android_Uygulama_Kaynak.zip"
-
-          if [ ! -f "$ZIP" ]; then
-            echo "::error::Kaynak ZIP dosyasi bulunamadi."
-            exit 1
-          fi
-
-          mkdir -p /tmp/aurora
-          unzip -o "$ZIP" -d /tmp/aurora
-
       - name: Java ve Kotlin hedeflerini duzelt
         shell: bash
         run: |
@@ -57,173 +10,118 @@ jobs:
           import sys
 
           root = Path("/tmp/aurora")
-          files = list(root.rglob("build.gradle.kts"))
-          files += list(root.rglob("build.gradle"))
+          candidates = []
 
-          android_files = []
-
-          for path in files:
+          for path in list(root.rglob("build.gradle.kts")) + list(root.rglob("build.gradle")):
               text = path.read_text(encoding="utf-8")
-              is_android = (
-                  "com.android.application" in text
-                  or "com.android.library" in text
-                  or path.parent.name == "app"
-              )
 
-              if is_android:
-                  android_files.append(path)
+              # Ana Gradle dosyasini atla.
+              # Yalnizca gercek android blogu olan modulleri sec.
+              if re.search(r'\bandroid\s*\{', text):
+                  candidates.append(path)
 
-          if not android_files:
-              print("Android modulu icin Gradle dosyasi bulunamadi.")
+          if not candidates:
+              print("Android blogu bulunan modul dosyasi bulunamadi.")
               sys.exit(1)
 
-          changed_files = 0
+          changed = 0
 
-          for path in android_files:
+          for path in candidates:
               text = path.read_text(encoding="utf-8")
               original = text
 
+              # Java hedefini 17 yap.
               text = re.sub(
-                  r'\bJavaVersion\.VERSION_1_8\b',
+                  r'JavaVersion\.VERSION_1_8',
                   'JavaVersion.VERSION_17',
                   text
               )
 
+              # Kotlin hedefi 1.8 ise 17 yap.
               text = re.sub(
-                  r'(?m)^(\s*(?:sourceCompatibility|targetCompatibility)\s*=\s*)["\']1\.8["\']',
+                  r"""(jvmTarget\s*=\s*)["'](?:1\.8|8)["']""",
                   r'\1"17"',
                   text
               )
 
-              match = re.search(r'\bcompileOptions\s*\{', text)
+              # Android blogunu bul.
+              match = re.search(r'\bandroid\s*\{', text)
+              opening = text.find("{", match.start())
+              depth = 1
+              pos = opening + 1
 
-              if match:
-                  opening = text.find("{", match.start())
-                  depth = 1
-                  pos = opening + 1
+              while pos < len(text) and depth:
+                  if text[pos] == "{":
+                      depth += 1
+                  elif text[pos] == "}":
+                      depth -= 1
+                  pos += 1
 
-                  while pos < len(text) and depth:
-                      if text[pos] == "{":
-                          depth += 1
-                      elif text[pos] == "}":
-                          depth -= 1
-                      pos += 1
+              if depth != 0:
+                  print(f"Android blogu kapanmiyor: {path}")
+                  sys.exit(1)
 
-                  if depth != 0:
-                      print(f"compileOptions blogu okunamadi: {path}")
+              end = pos - 1
+              block = text[opening + 1:end]
+
+              # Var olan compileOptions blogunu kaldir.
+              co = re.search(r'\bcompileOptions\s*\{', block)
+
+              if co:
+                  co_open = block.find("{", co.start())
+                  d = 1
+                  p = co_open + 1
+
+                  while p < len(block) and d:
+                      if block[p] == "{":
+                          d += 1
+                      elif block[p] == "}":
+                          d -= 1
+                      p += 1
+
+                  if d != 0:
+                      print(f"compileOptions blogu hatali: {path}")
                       sys.exit(1)
 
-                  block_end = pos - 1
-                  block = text[opening + 1:block_end]
+                  block = block[:co.start()] + block[p:]
 
-                  block = re.sub(
-                      r'(?m)^\s*(?:sourceCompatibility|targetCompatibility)\s*(?:=)?\s*.*(?:\n|$)',
-                      '',
-                      block
-                  )
+              # Her iki Gradle DSL icin Java 17 ayari.
+              block = (
+                  "\n    compileOptions {\n"
+                  "        sourceCompatibility = JavaVersion.VERSION_17\n"
+                  "        targetCompatibility = JavaVersion.VERSION_17\n"
+                  "    }\n"
+                  + block
+              )
 
-                  syntax = (
-                      '\n        sourceCompatibility = JavaVersion.VERSION_17\n'
-                      '        targetCompatibility = JavaVersion.VERSION_17\n'
-                  )
+              text = text[:opening + 1] + block + text[end:]
 
-                  text = text[:opening + 1] + syntax + block + text[block_end:]
-
-              else:
-                  android_block = re.search(r'\bandroid\s*\{', text)
-
-                  if not android_block:
-                      print(f"android blogu bulunamadi: {path}")
-                      sys.exit(1)
-
-                  opening = text.find("{", android_block.start())
-
-                  syntax = (
-                      '\n    compileOptions {\n'
-                      '        sourceCompatibility = JavaVersion.VERSION_17\n'
-                      '        targetCompatibility = JavaVersion.VERSION_17\n'
-                      '    }\n'
-                  )
-
-                  text = text[:opening + 1] + syntax + text[opening + 1:]
+              # Kotlin hedefi yoksa, modul dosyasina uygun gorev ekle.
+              if not re.search(r'\bjvmTarget\s*=', text):
+                  if path.name == "build.gradle.kts":
+                      text += (
+                          "\n\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>()"
+                          ".configureEach {\n"
+                          '    kotlinOptions.jvmTarget = "17"\n'
+                          "}\n"
+                      )
+                  else:
+                      text += (
+                          "\n\ntasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile)"
+                          ".configureEach {\n"
+                          '    kotlinOptions.jvmTarget = "17"\n'
+                          "}\n"
+                      )
 
               if text != original:
                   path.write_text(text, encoding="utf-8")
-                  changed_files += 1
-                  print(f"Java 17 ayari uygulandi: {path}")
+                  changed += 1
 
-          if changed_files == 0:
-              print("Gradle dosyalarinda degisiklik yapilamadi.")
+              print(f"Kontrol edildi: {path}")
+
+          if changed == 0:
+              print("Hicbir modul dosyasi degismedi; hedef ayarlari kontrol edilmeli.")
               sys.exit(1)
 
-          print(f"Duzenlenen dosya sayisi: {changed_files}")
+          print(f"Duzenlenen Android modul dosyasi: {changed}")
           PY
-
-      - name: Android projesini bul
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SETTINGS="$(find /tmp/aurora -type f \( \
-            -name settings.gradle.kts -o \
-            -name settings.gradle \
-          \) -print -quit)"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Android proje ayarlari bulunamadi."
-            exit 1
-          fi
-
-          PROJECT="$(dirname "$SETTINGS")"
-
-          if [ ! -f "$PROJECT/build.gradle.kts" ] && \
-             [ ! -f "$PROJECT/build.gradle" ]; then
-            echo "::error::Ana Gradle dosyasi bulunamadi."
-            exit 1
-          fi
-
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje: $PROJECT"
-
-      - name: APK derle
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon assembleDebug
-          else
-            gradle --no-daemon assembleDebug
-          fi
-
-      - name: APK dosyasini bul
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find /tmp/aurora -type f \
-            -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "::error::APK dosyasi olusturulamadi."
-            exit 1
-          fi
-
-          mkdir -p apk-output
-          cp "$APK" apk-output/YB-Aurora-debug.apk
-
-          echo "APK hazirlandi."
-
-      - name: APK dosyasini yayinla
-        uses: actions/upload-artifact@v4
-        with:
-          name: YB-Aurora-debug-APK
-          path: apk-output/YB-Aurora-debug.apk
-          if-no-files-found: error
-          retention-days: 7
