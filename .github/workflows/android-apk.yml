@@ -1,4 +1,4 @@
-content = r'''name: YB Aurora APK Derle
+name: "YB Aurora APK Derle"
 
 on:
   workflow_dispatch:
@@ -8,175 +8,170 @@ permissions:
 
 jobs:
   build:
-    name: YB Aurora Android APK
+    name: "Android APK Uygulamasi"
     runs-on: ubuntu-24.04
 
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
-      - name: Depoyu indir
+      - name: "Depoyu indir"
         uses: actions/checkout@v4
 
-      - name: Java 17 kur
+      - name: "Java 17 kur"
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK aracini bul
+      - name: "Gradle kur"
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: "Android SDK kur"
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          log-accepted-android-sdk-licenses: "true"
+
+      - name: "Android SDK lisanslarini kabul et"
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses || true
+
+      - name: "Kaynak ZIP dosyasini bul ve ac"
         shell: bash
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager -print -quit)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::Android SDK sdkmanager bulunamadi."
-            exit 1
-          fi
-
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-
-      - name: Android SDK lisanslarini kabul et
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +o pipefail
-
-          yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            --licenses
-
-          set -o pipefail
-
-      - name: Android SDK paketlerini kur
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Gradle 8.9 kur
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd /tmp
-
-          curl -fL \
-            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
-            -o gradle.zip
-
-          unzip -q gradle.zip
-          echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
-
-      - name: Android kaynak ZIP dosyasini bul
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
+          mkdir -p /tmp/aurora
 
           ZIP=""
 
-          for FILE in ./*.zip; do
-            [ -f "$FILE" ] || continue
-
-            if unzip -Z1 "$FILE" 2>/dev/null |
-              grep -Eq '(^|/)settings\.gradle(\.kts)?$'; then
-              ZIP="$FILE"
+          for candidate in \
+            "YB_Aurora_Android_Uygulama_Kaynak_DUZELTILMIS.zip" \
+            "YB_Aurora_Android_Uygulama_Kaynak.zip"
+          do
+            if [ -f "$candidate" ]; then
+              ZIP="$candidate"
               break
             fi
           done
 
           if [ -z "$ZIP" ]; then
-            echo "::error::Android proje ZIP dosyasi bulunamadi."
+            echo "::error::Kaynak ZIP dosyasi bulunamadi."
+            echo "Depodaki ZIP dosyalari:"
             find . -maxdepth 3 -type f -iname "*.zip" -print
             exit 1
           fi
 
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Kullanilan kaynak: $ZIP"
 
-      - name: Kaynak ZIP dosyasini ac
-        shell: bash
-        env:
-          SOURCE_ZIP: ${{ steps.source.outputs.zip }}
-        run: |
-          set -euo pipefail
+          unzip -o "$ZIP" -d /tmp/aurora
 
-          mkdir -p /tmp/aurora
-          unzip -o "$SOURCE_ZIP" -d /tmp/aurora
+          echo "ZIP icerigi:"
+          find /tmp/aurora -maxdepth 4 -type f -print
 
-      - name: Android projesini bul
+      - name: "Android projesini dogrula"
         id: project
         shell: bash
         run: |
           set -euo pipefail
 
-          SETTINGS="$(find /tmp/aurora -type f \
-            \( -name settings.gradle.kts \
-            -o -name settings.gradle \) \
-            -print -quit)"
+          SETTINGS="$(
+            find /tmp/aurora -type f \
+              \( -name "settings.gradle.kts" \
+              -o -name "settings.gradle" \) \
+              -print -quit
+          )"
 
           if [ -z "$SETTINGS" ]; then
-            echo "::error::Android proje ayarlari bulunamadi."
+            echo "::error::settings.gradle veya settings.gradle.kts bulunamadi."
             exit 1
           fi
 
           PROJECT="$(dirname "$SETTINGS")"
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      - name: Java ve Kotlin hedeflerini duzelt
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          if [ ! -f app/build.gradle.kts ]; then
-            echo "::error::app/build.gradle.kts bulunamadi."
+          if [ ! -f "$PROJECT/app/build.gradle.kts" ] \
+            && [ ! -f "$PROJECT/app/build.gradle" ]; then
+            echo "::error::Android app modulu bulunamadi."
+            find "$PROJECT" -maxdepth 5 -type f -print
             exit 1
           fi
 
-          cat > app/build.gradle.kts <<'GRADLE'
-          plugins {
-              id("com.android.application")
-              id("org.jetbrains.kotlin.android")
-          }
+          if [ ! -f "$PROJECT/app/src/main/AndroidManifest.xml" ]; then
+            echo "::error::AndroidManifest.xml bulunamadi."
+            exit 1
+          fi
 
-          android {
-              namespace = "com.yb.aurora"
-              compileSdk = 35
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
 
-              defaultConfig {
-                  applicationId = "com.yb.aurora"
-                  minSdk = 26
-                  targetSdk = 35
-                  versionCode = 1
-                  versionName = "1.0"
-              }
+          echo "Proje dizini: $PROJECT"
 
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
+      - name: "Hatali arama XML dosyasini kontrol et"
+        shell: bash
+        run: |
+          set -euo pipefail
 
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-          }
-          GRADLE
+          python3 <<'PY'
+          from pathlib import Path
+          import sys
 
-      - name: Android proje dosyalarini kontrol et
+          root = Path("/tmp/aurora")
+
+          xml_files = list(
+              root.rglob(
+                  "app/src/main/res/xml/in_call_service.xml"
+              )
+          )
+
+          if not xml_files:
+              print(
+                  "in_call_service.xml bulunamadi. "
+                  "XML temizleme adimi gerekmiyor."
+              )
+              sys.exit(0)
+
+          manifests = list(
+              root.rglob("app/src/main/AndroidManifest.xml")
+          )
+
+          for xml in xml_files:
+              referenced = False
+
+              for manifest in manifests:
+                  content = manifest.read_text(
+                      encoding="utf-8"
+                  )
+
+                  if "in_call_service" in content:
+                      referenced = True
+                      print(
+                          "Manifest referansi bulundu: "
+                          f"{manifest}"
+                      )
+
+              if referenced:
+                  print(
+                      "HATA: Arama XML dosyasi Manifest "
+                      "tarafindan referans ediliyor."
+                  )
+                  print(
+                      "Dosya otomatik silinmedi. "
+                      "Arama hizmeti yapilandirmasi "
+                      "birlikte duzeltilmeli."
+                  )
+                  sys.exit(1)
+
+              print(
+                  "Kullanilmayan XML dosyasi kaldiriliyor: "
+                  f"{xml}"
+              )
+              xml.unlink()
+
+          print("XML kontrolu tamamlandi.")
+          PY
+
+      - name: "Android APK derle"
         shell: bash
         env:
           PROJECT_DIR: ${{ steps.project.outputs.dir }}
@@ -185,51 +180,38 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          test -f settings.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
+          gradle --no-daemon assembleDebug
 
-      - name: APK derle
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          gradle \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
-
-      - name: APK dosyasini hazirla
+      - name: "APK dosyasini bul ve dogrula"
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find /tmp/aurora -type f \
-            -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
+          APK="$(
+            find /tmp/aurora -type f \
+              -path "*/build/outputs/apk/debug/*.apk" \
+              -print -quit
+          )"
 
           if [ -z "$APK" ]; then
-            echo "::error::Derleme sonrasi APK bulunamadi."
+            echo "::error::APK olusturulamadi."
+            find /tmp/aurora -type f -name "*.apk" -print
             exit 1
           fi
 
           mkdir -p apk-output
+
           cp "$APK" apk-output/YB-Aurora-debug.apk
+
+          test -s apk-output/YB-Aurora-debug.apk
+
+          echo "APK basariyla bulundu."
           ls -lh apk-output/YB-Aurora-debug.apk
 
-      - name: APK dosyasini yayinla
+      - name: "APK dosyasini yayinla"
         uses: actions/upload-artifact@v4
         with:
           name: YB-Aurora-debug-APK
           path: apk-output/YB-Aurora-debug.apk
           if-no-files-found: error
           retention-days: 7
-'''
-path = "/mnt/data/android-apk.yml"
-with open(path, "w", encoding="utf-8") as f:
-    f.write(content)
-print(f"Dosya oluşturuldu: {path}\nSatır sayısı: {len(content.splitlines())}")
