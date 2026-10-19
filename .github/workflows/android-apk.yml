@@ -1,17 +1,21 @@
 
-name: YB Aurora APK Derle
+name: "YB Aurora APK Derle"
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Depoyu indir
         uses: actions/checkout@v4
 
-      - name: Java kur
+      - name: Java 17 kur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -23,24 +27,58 @@ jobs:
       - name: Gradle kur
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Kaynak ZIP dosyasini ac
+      - name: Kaynak ZIP dosyasini kontrol et ve ac
+        shell: bash
         run: |
+          set -euo pipefail
+
+          ZIP="YB_Aurora_Android_Uygulama_Kaynak.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "::error::Kaynak ZIP dosyasi depo ana dizininde bulunamadi."
+            exit 1
+          fi
+
           mkdir -p /tmp/aurora
-          unzip -o YB_Aurora_Android_Uygulama_Kaynak.zip -d /tmp/aurora
+          unzip -o "$ZIP" -d /tmp/aurora
+
+      - name: Android projesini bul
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$(find /tmp/aurora -type f \( \
+            -name settings.gradle.kts -o \
+            -name settings.gradle \
+          \) -print -quit)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle veya settings.gradle.kts bulunamadi."
+            exit 1
+          fi
+
+          PROJECT="$(dirname "$SETTINGS")"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Bulunan proje: $PROJECT"
 
       - name: APK derle
         shell: bash
         run: |
-          PROJECT="$(find /tmp/aurora -name settings.gradle.kts -printf '%h\n' | head -1)"
-          if [ -z "$PROJECT" ]; then
-            echo "Proje dosyasi bulunamadi"
-            exit 1
+          set -euo pipefail
+          cd "${{ steps.project.outputs.dir }}"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
           fi
-          cd "$PROJECT"
-          gradle --no-daemon assembleDebug
 
       - name: APK dosyasini yayinla
         uses: actions/upload-artifact@v4
         with:
           name: YB-Aurora-debug-APK
-          path: /tmp/aurora/**/app/build/outputs/apk/debug/*.apk
+          path: /tmp/aurora/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
