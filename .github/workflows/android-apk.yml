@@ -1,132 +1,123 @@
-name: "YB Aurora APK Derle"
+name: Veron Vera Android APK
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android-apk.yml"
+      - "YB_Aurora_Android_Uygulama_Kaynak_DUZELTILMIS.zip"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: "Android APK Uygulamasi"
-    runs-on: ubuntu-24.04
+    name: Android APK oluştur
+    runs-on: ubuntu-latest
 
     steps:
-      - name: "Depoyu indir"
+      - name: Depoyu indir
         uses: actions/checkout@v4
 
-      - name: "Java 17 kur"
+      - name: Java 17 kur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: "Gradle kur"
+      - name: Gradle kur ve önbelleği hazırla
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: "Android SDK kur"
-        uses: android-actions/setup-android@v4
-        with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
-          log-accepted-android-sdk-licenses: "true"
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v3
 
-      - name: "Android SDK lisanslarini kabul et"
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses || true
+      - name: Android SDK lisanslarını kabul et
+        run: yes | sdkmanager --licenses || true
 
-      - name: "Kaynak ZIP dosyasini bul ve ac"
+      - name: Kaynak ZIP dosyasını bul ve aç
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p /tmp/aurora
-          ZIP=""
+          ZIP_FILE="$GITHUB_WORKSPACE/YB_Aurora_Android_Uygulama_Kaynak_DUZELTILMIS.zip"
 
-          for candidate in \
-            "YB_Aurora_Android_Uygulama_Kaynak_DUZELTILMIS.zip" \
-            "YB_Aurora_Android_Uygulama_Kaynak.zip" \
-            "YB_Aurora_Android_Uygulama_Kaynak(1).zip"
-          do
-            if [ -f "$candidate" ]; then
-              ZIP="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$ZIP" ]; then
-            echo "::error::Kaynak ZIP dosyasi bulunamadi."
-            find . -maxdepth 3 -type f -iname "*.zip" -print
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Kaynak ZIP dosyası bulunamadı: $ZIP_FILE"
+            echo "Depodaki ZIP dosyaları:"
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -name '*.zip' -print
             exit 1
           fi
 
-          echo "Kullanilan kaynak: $ZIP"
-          unzip -o "$ZIP" -d /tmp/aurora
+          mkdir -p /tmp/aurora
+          unzip -o "$ZIP_FILE" -d /tmp/aurora
 
-      - name: "Android projesini bul"
+          echo "ZIP dosyası başarıyla açıldı."
+          find /tmp/aurora -maxdepth 3 -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
+
+      - name: Android projesini bul
         id: project
         shell: bash
         run: |
           set -euo pipefail
 
-          SETTINGS="$(
-            find /tmp/aurora -type f \
-              -name "settings.gradle.kts" \
-              -o -name "settings.gradle" \
-              -print -quit
-          )"
+          SETTINGS_FILE="$(find /tmp/aurora -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+            -print -quit)"
 
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Gradle ayar dosyasi bulunamadi."
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::Android projesi bulunamadı."
             find /tmp/aurora -maxdepth 5 -type f -print
             exit 1
           fi
 
-          PROJECT="$(dirname "$SETTINGS")"
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
-          if [ ! -f "$PROJECT/app/build.gradle.kts" ] \
-            && [ ! -f "$PROJECT/app/build.gradle" ]; then
-            echo "::error::Android app modulu bulunamadi."
-            exit 1
-          fi
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Android projesi: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
-          if [ ! -f "$PROJECT/app/src/main/AndroidManifest.xml" ]; then
-            echo "::error::AndroidManifest.xml bulunamadi."
-            exit 1
-          fi
-
-          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
-          echo "Proje dizini: $PROJECT"
-
-      - name: "Hatali arama XML dosyasini duzelt"
+      - name: Android APK dosyasını derle
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Oluşturulan APK dosyasını kontrol et
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
+          APK_FILE="$(find "$PROJECT_DIR" -type f \
+            -path '*/build/outputs/apk/debug/*.apk' \
+            -print -quit)"
 
-          root = Path("/tmp/aurora")
-          android_ns = (
-              "http://schemas.android.com/apk/res/android"
-          )
+          if [ -z "$APK_FILE" ]; then
+            echo "::error::APK oluşturulamadı veya beklenen konumda bulunamadı."
+            find "$PROJECT_DIR" -type f -name '*.apk' -print
+            exit 1
+          fi
 
-          def attr(name):
-              return "{" + android_ns + "}" + name
+          echo "APK başarıyla bulundu: $APK_FILE"
+          ls -lh "$APK_FILE"
 
-          manifests = list(
-              root.rglob("app/src/main/AndroidManifest.xml")
-          )
-
-          for manifest in manifests:
-              print(f"Manifest kontrol ediliyor: {manifest}")
-
-              try:
-                  tree = ET.parse(manifest)
-              except ET.ParseError as exc:
-                  raise SystemExit(
-                      f"Manifest
+      - name: APK dosyasını indirilebilir olarak yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: YB-Aurora-debug-APK
+          path: ${{ steps.project.outputs.dir }}/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
